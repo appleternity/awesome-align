@@ -34,8 +34,6 @@ from awesome_align.tokenization_bert import BertTokenizer
 from awesome_align.tokenization_utils import PreTrainedTokenizer
 from awesome_align.modeling_utils import PreTrainedModel
 
-
-
 def set_seed(args):
     if args.seed >= 0:
         random.seed(args.seed)
@@ -43,42 +41,58 @@ def set_seed(args):
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
 
-class LineByLineTextDataset(Dataset):
-    def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path):
-        assert os.path.isfile(file_path)
-        print('Loading the dataset...')
-        self.examples = []
-        with open(file_path, encoding="utf-8") as f:
-            for idx, line in enumerate(f.readlines()):
-                if len(line) == 0 or line.isspace() or not len(line.split(' ||| ')) == 2:
-                    raise ValueError(f'Line {idx+1} is not in the correct format!')
-                
-                src, tgt = line.split(' ||| ')
-                if src.rstrip() == '' or tgt.rstrip() == '':
-                    raise ValueError(f'Line {idx+1} is not in the correct format!')
-            
-                sent_src, sent_tgt = src.strip().split(), tgt.strip().split()
-                token_src, token_tgt = [tokenizer.tokenize(word) for word in sent_src], [tokenizer.tokenize(word) for word in sent_tgt]
-                wid_src, wid_tgt = [tokenizer.convert_tokens_to_ids(x) for x in token_src], [tokenizer.convert_tokens_to_ids(x) for x in token_tgt]
+    def __init__(self, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, device: torch.device):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
 
-                ids_src, ids_tgt = tokenizer.prepare_for_model(list(itertools.chain(*wid_src)), return_tensors='pt', max_length=tokenizer.max_len)['input_ids'], tokenizer.prepare_for_model(list(itertools.chain(*wid_tgt)), return_tensors='pt', max_length=tokenizer.max_len)['input_ids']
-                if len(ids_src[0]) == 2 or len(ids_tgt[0]) == 2:
-                    raise ValueError(f'Line {idx+1} is not in the correct format!')
+        self.model.to(device)
+        self.model.eval()
 
-                bpe2word_map_src = []
-                for i, word_list in enumerate(token_src):
-                    bpe2word_map_src += [i for x in word_list]
-                bpe2word_map_tgt = []
-                for i, word_list in enumerate(token_tgt):
-                    bpe2word_map_tgt += [i for x in word_list]
+        self.align_layer = 8
+        self.extraction = "softmax"
+        self.softmax_threshold = 0.001
 
-                self.examples.append( (ids_src[0], ids_tgt[0], bpe2word_map_src, bpe2word_map_tgt) )
+    def process_data(self, source, target):
+        sent_src, sent_tgt = source.strip().split(), target.strip().split()
+        token_src, token_tgt = [self.tokenizer.tokenize(word) for word in sent_src], [self.tokenizer.tokenize(word) for word in sent_tgt]
+        wid_src, wid_tgt = [self.tokenizer.convert_tokens_to_ids(x) for x in token_src], [self.tokenizer.convert_tokens_to_ids(x) for x in token_tgt]
+        ids_src = self.tokenizer.prepare_for_model(list(itertools.chain(*wid_src)), return_tensors='pt', max_length=self.tokenizer.max_len)['input_ids']
+        ids_tgt = self.tokenizer.prepare_for_model(list(itertools.chain(*wid_tgt)), return_tensors='pt', max_length=self.tokenizer.max_len)['input_ids']
 
-    def __len__(self):
-        return len(self.examples)
+        if len(ids_src[0]) == 2 or len(ids_tgt[0]) == 2:
+            raise ValueError(f'source:{source}\ntarget:{target}\nNot in the correct format!')
 
-    def __getitem__(self, i):
-        return self.examples[i]
+        bpe2word_map_src = []
+        for i, word_list in enumerate(token_src):
+            bpe2word_map_src += [i for x in word_list]
+        bpe2word_map_tgt = []
+        for i, word_list in enumerate(token_tgt):
+            bpe2word_map_tgt += [i for x in word_list]
+
+        return ids_src[0].reshape(1, -1), ids_tgt[0].reshape(1, -1), (bpe2word_map_src,), (bpe2word_map_tgt,)
+
+    @torch.no_grad()
+    def align(self, source, target):
+        ids_src, ids_tgt, bpe2word_map_src, bpe2word_map_tgt = self.process_data(source, target)
+        word_aligns_list = self.model.get_aligned_word(
+            ids_src, 
+            ids_tgt, 
+            bpe2word_map_src, 
+            bpe2word_map_tgt, 
+            self.device, 
+            0, 
+            0, 
+            align_layer=self.align_layer, 
+            extraction=self.extraction, 
+            softmax_threshold=self.softmax_threshold, 
+            test=True, 
+            output_prob=False,
+        )
+
+        print(word_aligns_list)
+
+
 
 def word_align(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer):
 
@@ -103,11 +117,6 @@ def word_align(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer):
         for batch in dataloader:
             with torch.no_grad():
                 ids_src, ids_tgt, bpe2word_map_src, bpe2word_map_tgt = batch
-                print(ids_src.shape)
-                print(ids_tgt.shape)
-                print(bpe2word_map_src)
-                print(bpe2word_map_tgt)
-                quit()
                 word_aligns_list = model.get_aligned_word(ids_src, ids_tgt, bpe2word_map_src, bpe2word_map_tgt, args.device, 0, 0, align_layer=args.align_layer, extraction=args.extraction, softmax_threshold=args.softmax_threshold, test=True, output_prob=(args.output_prob_file is not None))
                 for word_aligns in word_aligns_list:
                     output_str = []
@@ -213,7 +222,13 @@ def main():
     else:
         model = model_class(config=config)
 
-    word_align(args, model, tokenizer)
+    #word_align(args, model, tokenizer)
+    aligner = WordAligner(model, tokenizer, device)
+
+    # test
+    source = "create work meeting on monday at 2"
+    target = 'create event called " work meeting" starting next Monday 2 PM'
+    aligner.align(source, target)
 
 if __name__ == "__main__":
     main()
