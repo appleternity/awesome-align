@@ -5,10 +5,9 @@ GPU="1"
 
 # base cases
 VERSION_LIST=( \
-    "mention-caption-alignment" \
-    "paragraph-caption-alignment" \ 
-    "mention-caption-random-alignment" \
-    "paragraph-caption-random-alignment" \
+    "mention+ocr-caption-alignment" \
+    "paragraph+ocr-caption-alignment" \ 
+    "ocr-caption-alignment" \ 
 )
 
 # context cases
@@ -16,7 +15,7 @@ left=(0 0 1 2 1 2)
 right=(1 2 0 0 1 2)
 for i in ${!left[@]};
 do
-    VERSION_LIST+=("context-${left[i]}-${right[i]}-caption-alignment")
+    VERSION_LIST+=("context-${left[i]}-${right[i]}+ocr-caption-alignment")
 done
 
 # show

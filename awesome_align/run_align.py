@@ -23,7 +23,7 @@ import os
 
 import numpy as np
 import torch
-from tqdm import trange
+from tqdm import trange, tqdm
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, SequentialSampler
 
@@ -49,7 +49,7 @@ class LineByLineTextDataset(Dataset):
         print('Loading the dataset...')
         self.examples = []
         with open(file_path, encoding="utf-8") as f:
-            for idx, line in enumerate(f.readlines()):
+            for idx, line in enumerate(tqdm(f.readlines(), desc="Loading")):
                 if len(line) == 0 or line.isspace() or not len(line.split(' ||| ')) == 2:
                     raise ValueError(f'Line {idx+1} is not in the correct format!')
                 
@@ -103,12 +103,17 @@ def word_align(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer):
         for batch in dataloader:
             with torch.no_grad():
                 ids_src, ids_tgt, bpe2word_map_src, bpe2word_map_tgt = batch
-                print(ids_src.shape)
-                print(ids_tgt.shape)
-                print(bpe2word_map_src)
-                print(bpe2word_map_tgt)
-                quit()
-                word_aligns_list = model.get_aligned_word(ids_src, ids_tgt, bpe2word_map_src, bpe2word_map_tgt, args.device, 0, 0, align_layer=args.align_layer, extraction=args.extraction, softmax_threshold=args.softmax_threshold, test=True, output_prob=(args.output_prob_file is not None))
+                #print(ids_src.shape)
+                #print(ids_tgt.shape)
+                #print(bpe2word_map_src)
+                #print(bpe2word_map_tgt)
+                #quit()
+                word_aligns_list = model.get_aligned_word(
+                        ids_src, ids_tgt, bpe2word_map_src, bpe2word_map_tgt, args.device, 0, 0, 
+                        align_layer=args.align_layer, extraction=args.extraction, 
+                        softmax_threshold=args.softmax_threshold, test=True, 
+                        output_prob=(args.output_prob_file is not None)
+                    )
                 for word_aligns in word_aligns_list:
                     output_str = []
                     if args.output_prob_file is not None:
